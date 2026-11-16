@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // The rules of extension/commands.js, run with GJS (no GNOME Shell needed):
 //
 //   gjs -m test/commands.test.js

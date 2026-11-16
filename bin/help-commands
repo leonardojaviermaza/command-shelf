@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 # help-commands: Lists your own commands, grouped, and runs the one you pick.
 # Finds the executables in ~/.local/bin and /usr/local/bin with a line "# help-commands: <description>" among their first
 # five lines. To add a command, give it that line and install it in one of those folders.

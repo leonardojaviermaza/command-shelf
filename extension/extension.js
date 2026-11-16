@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Command Shelf: an icon in the top bar, next to the clock, that lists your own commands by group and runs the one you pick
 // in a terminal. The list is read again every time the menu opens, so a new script shows up without restarting anything.
 

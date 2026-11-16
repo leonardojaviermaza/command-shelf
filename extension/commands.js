@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Finds the commands: the executables of the folders below whose first lines carry the help-commands header.
 //
 //   # help-commands: <what it does>
