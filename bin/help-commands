@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# help-commands: Lists your own commands, grouped, and runs the one you pick.
+# Finds the executables in ~/.local/bin and /usr/local/bin with a line "# help-commands: <description>" among their first
+# five lines. To add a command, give it that line and install it in one of those folders.
+#
+# The group comes, in this order, from:
+#   1. a line "# help-commands-group: <group>" in the command itself;
+#   2. ~/.config/help-commands/groups, one "<command>=<group>" per line (for the ones you cannot edit),
+#      and "*=<group>" for the default;
+#   3. otherwise, "General".
+#
+# Usage:
+#   help-commands          a menu to pick a command and run it
+#   help-commands --list   only the list (also when the output is not a terminal)
+#
+# Part of Command Shelf (https://github.com/leonardojaviermaza/command-shelf): its GNOME extension shows the same list in the top bar.
+set -uo pipefail
+
+self=$(basename "$0")
+groups_file="${XDG_CONFIG_HOME:-$HOME/.config}/help-commands/groups"
+
+# The few texts it says, in Spanish when the system is.
+if [[ "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" == es* ]]; then
+  t_none="No hay comandos propios instalados."
+  t_title="Comandos propios"
+  t_menu="Elegí un comando (flechas + Enter, Esc para salir):"
+  t_number="Número del comando (Enter para salir): "
+  t_invalid="Opción inválida:"
+  t_args="Argumentos para %s (Enter = ninguno): "
+  default_group="General"
+else
+  t_none="No commands of your own installed yet."
+  t_title="Your commands"
+  t_menu="Pick a command (arrows + Enter, Esc to leave):"
+  t_number="Command number (Enter to leave): "
+  t_invalid="Invalid option:"
+  t_args="Arguments for %s (Enter = none): "
+  default_group="General"
+fi
+
+declare -A mapped=()
+if [[ -r "$groups_file" ]]; then
+  while IFS='=' read -r key value; do
+    key=$(sed 's/^ *//; s/ *$//' <<<"$key")
+    [[ -n "$key" && "$key" != \#* ]] || continue
+    mapped[$key]=$(sed 's/^ *//; s/ *$//' <<<"$value")
+  done <"$groups_file"
+fi
+[[ -n "${mapped['*']:-}" ]] && default_group=${mapped['*']}
+
+names=()
+descs=()
+paths=()
+groups=()
+declare -A seen=()
+
+while IFS=$'\t' read -r group name desc path; do
+  groups+=("$group")
+  names+=("$name")
+  descs+=("$desc")
+  paths+=("$path")
+done < <(
+  for dir in "$HOME/.local/bin" /usr/local/bin; do
+    [[ -d "$dir" ]] || continue
+    for f in "$dir"/*; do
+      [[ -f "$f" && -x "$f" && -r "$f" ]] || continue
+      name=$(basename "$f")
+      [[ "$name" != "$self" && -z "${seen[$name]:-}" ]] || continue
+      head=$(head -c 1024 "$f" 2>/dev/null | tr -d '\0' | head -5)
+      desc=$(grep -m1 -a '^# help-commands:' <<<"$head" | sed 's/^# help-commands: *//')
+      [[ -n "$desc" ]] || continue
+      group=$(grep -m1 -a '^# help-commands-group:' <<<"$head" | sed 's/^# help-commands-group: *//; s/ *$//')
+      [[ -n "$group" ]] || group=${mapped[$name]:-$default_group}
+      seen[$name]=1
+      printf '%s\t%s\t%s\t%s\n' "$group" "$name" "$desc" "$f"
+    done
+  done | sort -t $'\t' -k1,1 -k2,2
+)
+
+if (( ${#names[@]} == 0 )); then
+  echo "$t_none"
+  exit 0
+fi
+
+print_list() {
+  local i n=0 last=""
+  for i in "${!names[@]}"; do
+    if [[ "${groups[$i]}" != "$last" ]]; then
+      [[ -n "$last" ]] && echo
+      printf '\e[1;4m%s\e[0m\n' "${groups[$i]}"
+      last=${groups[$i]}
+    fi
+    n=$((n + 1))
+    printf '  \e[1m%2d) %-18s\e[0m %s\n' "$n" "${names[$i]}" "${descs[$i]}"
+  done
+}
+
+if [[ "${1:-}" == "--list" || ! -t 0 || ! -t 1 ]]; then
+  print_list
+  exit 0
+fi
+
+pick=-1
+if command -v whiptail >/dev/null 2>&1; then
+  cols=$(tput cols 2>/dev/null || echo 100)
+  lines=$(tput lines 2>/dev/null || echo 24)
+  width=$(( cols > 20 ? cols - 4 : cols ))
+  items=()
+  last=""
+  for i in "${!names[@]}"; do
+    if [[ "${groups[$i]}" != "$last" ]]; then
+      items+=("·" "── ${groups[$i]} ──")
+      last=${groups[$i]}
+    fi
+    items+=("${names[$i]}" "${descs[$i]}")
+  done
+  menu_h=$(( ${#items[@]} / 2 ))
+  (( menu_h > lines - 8 )) && menu_h=$(( lines - 8 ))
+  while :; do
+    choice=$(whiptail --title "$t_title" --menu "$t_menu" \
+      $(( menu_h + 8 )) "$width" "$menu_h" "${items[@]}" 3>&1 1>&2 2>&3) || exit 0
+    [[ "$choice" != "·" ]] && break
+  done
+  for i in "${!names[@]}"; do
+    [[ "${names[$i]}" == "$choice" ]] && pick=$i && break
+  done
+else
+  print_list
+  read -rp $'\n'"$t_number" n
+  [[ -n "$n" ]] || exit 0
+  if [[ ! "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#names[@]} )); then
+    echo "$t_invalid $n" >&2
+    exit 1
+  fi
+  pick=$((n - 1))
+fi
+
+(( pick >= 0 )) || exit 0
+# shellcheck disable=SC2059  # the format is ours
+read -rep "$(printf "$t_args" "${names[$pick]}")" args
+echo "→ ${names[$pick]} $args"
+# By its path: ~/.local/bin is not always in the PATH.
+# shellcheck disable=SC2086  # the arguments split as they would in the terminal
+exec "${paths[$pick]}" $args
