@@ -95,6 +95,11 @@ class ShelfButton extends PanelMenu.Button {
             if (open)
                 this._refresh().catch(error => logError(error, TITLE));
         });
+
+        // GNOME Shell does not open an empty menu (`PopupMenu.open` returns on `isEmpty()`): it is filled right away, and the read
+        // on each open refreshes what is already there.
+        this.menu.addMenuItem(new PopupMenu.PopupMenuItem(says('loading'), {reactive: false}));
+        this._refresh().catch(error => logError(error, TITLE));
     }
 
     async _refresh() {

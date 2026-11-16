@@ -7,6 +7,7 @@ const TEXTS = {
     en: {
         empty: 'No commands yet: add one below, or put a "# help-commands: <description>" line in a script of ~/.local/bin',
         add: 'Add command…',
+        loading: 'Reading your commands…',
         edit: 'Edit',
         addTitle: 'Add a command',
         name: 'Name',
@@ -32,6 +33,7 @@ const TEXTS = {
     es: {
         empty: 'Todavía no hay comandos: agregá uno abajo, o poné una línea "# help-commands: <descripción>" en un script de ~/.local/bin',
         add: 'Agregar comando…',
+        loading: 'Leyendo tus comandos…',
         edit: 'Editar',
         addTitle: 'Agregar un comando',
         name: 'Nombre',
