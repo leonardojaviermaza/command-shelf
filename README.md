@@ -9,19 +9,41 @@ group, with what each one does**, and runs the one you pick in a terminal. The s
 
 ```
 ⌨  ▾
-   ── Home ───────────────────────
-   backup-photos
-     Copies the photos to the NAS.
-   ── Work ───────────────────────
-   vpn-up
-     Connects the work VPN.
-   start-dev
-     Starts the dev environment and waits until it answers.
+   Home                         ▸
+   Work                         ▾
+      vpn-up                    ✎
+        Connects the work VPN.
+      start-dev                 ✎
+        Starts the dev environment and waits until it answers.
+   ───────────────────────────────
+   ＋ Add command…
 ```
 
 Nothing to register and no list to keep: a script shows up as soon as it carries one line.
 
-## How a script joins the shelf
+## Adding a command
+
+From the menu, **Add command…** asks for four things and writes the script in `~/.local/bin`:
+
+| Field | Example |
+| --- | --- |
+| Name | `vpn-up` |
+| Group | `Work`: pick one of the existing groups, or type a new name and it says it will create it |
+| What it does | `Connects the work VPN.` |
+| What it runs | `nmcli connection up "Work"` |
+
+The **✎** next to a command opens its script in your text editor, to change what it runs, its description or its group.
+For a command you cannot edit (owned by root), it opens the groups file instead (below).
+
+In a terminal, `help-commands --add` asks the same four questions, and asks before creating a new group.
+
+## Groups folded or open
+
+Each group folds and unfolds with a click. In the extension's settings (the gear in **Extensions**), **Folded groups**
+decides how they start: folded, so a long list starts short, or all open. With folded groups, the ones you open stay open
+the next time, until you fold them.
+
+## How a script joins the shelf by hand
 
 Put the script in `~/.local/bin` or `/usr/local/bin`, make it executable, and add this line among its first five:
 
@@ -51,6 +73,7 @@ Without a group anywhere, a script goes to **General**. If a name is in both fol
 
 ```bash
 git clone https://github.com/leonardojaviermaza/command-shelf.git
+glib-compile-schemas command-shelf/extension/schemas
 mkdir -p ~/.local/share/gnome-shell/extensions
 ln -s "$PWD/command-shelf/extension" ~/.local/share/gnome-shell/extensions/command-shelf@leonardojaviermaza.github.io
 ```
@@ -74,6 +97,7 @@ sudo install -m 755 command-shelf/bin/help-commands /usr/local/bin/
 ```bash
 help-commands          # a menu (whiptail) to pick one and run it, asking for its arguments
 help-commands --list   # just the list, by group
+help-commands --add    # add a new command
 ```
 
 It speaks Spanish when your system does.

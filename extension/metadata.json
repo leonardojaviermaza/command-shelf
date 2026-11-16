@@ -4,5 +4,6 @@
   "description": "Your own scripts, grouped, one click away in the top bar. Lists the executables in ~/.local/bin and /usr/local/bin that carry a '# help-commands: <description>' line, groups them, and runs the one you pick in a terminal.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
   "url": "https://github.com/leonardojaviermaza/command-shelf",
+  "settings-schema": "org.gnome.shell.extensions.command-shelf",
   "version": 1
 }

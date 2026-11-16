@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<schemalist gettext-domain="command-shelf">
+  <schema id="org.gnome.shell.extensions.command-shelf" path="/org/gnome/shell/extensions/command-shelf/">
+    <key name="groups-collapsed" type="b">
+      <default>true</default>
+      <summary>Groups start folded</summary>
+      <description>When true, each group of the menu starts folded and opens with a click; when false, every group starts open.</description>
+    </key>
+    <key name="open-groups" type="as">
+      <default>[]</default>
+      <summary>Groups left open</summary>
+      <description>With folded groups, the ones you opened: they stay open the next time the menu opens, until you fold them again.</description>
+    </key>
+  </schema>
+</schemalist>

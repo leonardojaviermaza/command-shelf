@@ -22,11 +22,78 @@ export const DEFAULT_GROUP = 'General';
 
 const HEADER_BYTES = 1024;
 const HEADER_LINES = 5;
-const ATTRIBUTES = 'standard::name,standard::type,access::can-execute,access::can-read';
+const ATTRIBUTES = 'standard::name,standard::type,access::can-execute,access::can-read,access::can-write';
+
+/** The folder of your own commands, where a new one is written. */
+export function ownFolder() {
+    return GLib.build_filenamev([GLib.get_home_dir(), '.local', 'bin']);
+}
 
 /** The folders scanned, in order: the first one that has a name wins. */
 export function folders() {
-    return [GLib.build_filenamev([GLib.get_home_dir(), '.local', 'bin']), '/usr/local/bin'];
+    return [ownFolder(), '/usr/local/bin'];
+}
+
+/** The file that gives a group to the commands that do not carry one. */
+export function groupsFile() {
+    return GLib.build_filenamev([GLib.get_user_config_dir(), 'help-commands', 'groups']);
+}
+
+/** A command's name is a file name you can type in a terminal: letters, digits, dots, dashes and underscores. */
+export function validName(name) {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
+}
+
+/** The groups the commands use, sorted: what a new command can pick from. */
+export function groupNames(commands) {
+    return [...new Set(commands.map(command => command.group))].sort((a, b) => a.localeCompare(b));
+}
+
+/** Whether a group is already one of them, ignoring case and the spaces of the borders. */
+export function isKnownGroup(group, known) {
+    const wanted = group.trim().toLowerCase();
+    return known.some(each => each.toLowerCase() === wanted);
+}
+
+/** The text of a new command: the header the list reads, then what it runs. */
+export function scriptFor({description, group, command}) {
+    const oneLine = text => text.replaceAll(/\s*\n\s*/g, ' ').trim();
+
+    return [
+        '#!/usr/bin/env bash',
+        `# help-commands: ${oneLine(description)}`,
+        `# help-commands-group: ${oneLine(group)}`,
+        '',
+        command.trim(),
+        '',
+    ].join('\n');
+}
+
+/** Whether a command with that name is already in one of the folders. */
+export function exists(name) {
+    return folders().some(path => Gio.File.new_for_path(GLib.build_filenamev([path, name])).query_exists(null));
+}
+
+/**
+ * Writes a new command in ~/.local/bin, executable. Throws with a reason the menu shows if the name is not valid or is taken,
+ * or if a field is empty.
+ */
+export function createCommand({name, group, description, command}, says) {
+    const trimmed = name.trim();
+
+    if (!validName(trimmed))
+        throw new Error(says('invalidName'));
+    if (exists(trimmed))
+        throw new Error(says('nameTaken', trimmed));
+    if (description.trim() === '' || command.trim() === '' || group.trim() === '')
+        throw new Error(says('missingField'));
+
+    GLib.mkdir_with_parents(ownFolder(), 0o755);
+    const path = GLib.build_filenamev([ownFolder(), trimmed]);
+    GLib.file_set_contents(path, scriptFor({description, group, command}));
+    GLib.chmod(path, 0o755);
+
+    return path;
 }
 
 /** The description and the group a script's first lines declare, or null if it is not one of ours. */
@@ -59,7 +126,7 @@ export function parseGroups(text) {
 }
 
 async function readGroups() {
-    const file = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_config_dir(), 'help-commands', 'groups']));
+    const file = Gio.File.new_for_path(groupsFile());
 
     try {
         const [contents] = await file.load_contents_async(null);
@@ -103,14 +170,18 @@ async function entriesOf(path) {
                 || !info.get_attribute_boolean('access::can-read'))
                 continue;
 
-            found.push({name: info.get_name(), file: folder.get_child(info.get_name())});
+            found.push({
+                name: info.get_name(),
+                file: folder.get_child(info.get_name()),
+                writable: info.get_attribute_boolean('access::can-write'),
+            });
         }
     }
 
     return found;
 }
 
-/** Every command, sorted by group and name: `{group, name, description, path}`. */
+/** Every command, sorted by group and name: `{group, name, description, path, writable}`. */
 export async function scan() {
     const groups = await readGroups();
     const fallback = groups.get('*') || DEFAULT_GROUP;
@@ -118,7 +189,7 @@ export async function scan() {
     const commands = [];
 
     for (const path of folders()) {
-        for (const {name, file} of await entriesOf(path)) {
+        for (const {name, file, writable} of await entriesOf(path)) {
             if (seen.has(name))
                 continue;
 
@@ -138,6 +209,7 @@ export async function scan() {
                 name,
                 description: header.description,
                 path: file.get_path(),
+                writable,
             });
         }
     }

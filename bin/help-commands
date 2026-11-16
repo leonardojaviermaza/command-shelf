@@ -13,6 +13,7 @@
 # Usage:
 #   help-commands          a menu to pick a command and run it
 #   help-commands --list   only the list (also when the output is not a terminal)
+#   help-commands --add    asks for a new command (name, group, what it does, what it runs) and writes it in ~/.local/bin
 #
 # Part of Command Shelf (https://github.com/leonardojaviermaza/command-shelf): its GNOME extension shows the same list in the top bar.
 set -uo pipefail
@@ -28,6 +29,17 @@ if [[ "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" == es* ]]; then
   t_number="Número del comando (Enter para salir): "
   t_invalid="Opción inválida:"
   t_args="Argumentos para %s (Enter = ninguno): "
+  t_add_item="＋ Agregar un comando"
+  t_name="Nombre (letras, números, . - _): "
+  t_bad_name="Ese nombre no sirve: sólo letras, números, puntos, guiones y guiones bajos, y empieza con letra o número."
+  t_taken="Ya hay un comando que se llama %s."
+  t_groups="Grupos que ya existen:"
+  t_group="Grupo (número, o un nombre nuevo): "
+  t_new_group="Grupo nuevo: «%s». ¿Lo creo? [S/n] "
+  t_desc="Qué hace: "
+  t_cmd="Qué ejecuta: "
+  t_empty="No puede quedar vacío."
+  t_added="Listo: %s quedó en %s, en el grupo %s."
   default_group="General"
 else
   t_none="No commands of your own installed yet."
@@ -36,6 +48,17 @@ else
   t_number="Command number (Enter to leave): "
   t_invalid="Invalid option:"
   t_args="Arguments for %s (Enter = none): "
+  t_add_item="＋ Add a command"
+  t_name="Name (letters, digits, . - _): "
+  t_bad_name="That name will not do: only letters, digits, dots, dashes and underscores, starting with a letter or digit."
+  t_taken="There is already a command called %s."
+  t_groups="Groups that already exist:"
+  t_group="Group (a number, or a new name): "
+  t_new_group="New group: \"%s\". Create it? [Y/n] "
+  t_desc="What it does: "
+  t_cmd="What it runs: "
+  t_empty="It cannot be empty."
+  t_added="Done: %s is in %s, under %s."
   default_group="General"
 fi
 
@@ -78,6 +101,75 @@ done < <(
   done | sort -t $'\t' -k1,1 -k2,2
 )
 
+# The groups in use, once and in order: what a new command can pick from.
+known_groups=()
+for g in "${groups[@]}"; do
+  [[ " ${known_groups[*]} " == *" $g "* ]] || known_groups+=("$g")
+done
+
+# Asks until the answer is not empty.
+ask() {
+  local prompt=$1 answer
+  while :; do
+    read -rep "$prompt" answer
+    answer=$(sed 's/^ *//; s/ *$//' <<<"$answer")
+    [[ -n "$answer" ]] && { printf '%s' "$answer"; return; }
+    echo "$t_empty" >&2
+  done
+}
+
+add_command() {
+  local name group desc cmd answer i own="$HOME/.local/bin"
+
+  while :; do
+    name=$(ask "$t_name")
+    if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      echo "$t_bad_name" >&2
+    elif [[ -e "$own/$name" || -e "/usr/local/bin/$name" ]]; then
+      # shellcheck disable=SC2059  # the format is ours
+      printf "$t_taken\n" "$name" >&2
+    else
+      break
+    fi
+  done
+
+  if (( ${#known_groups[@]} > 0 )); then
+    echo "$t_groups"
+    for i in "${!known_groups[@]}"; do
+      printf '  %d) %s\n' $((i + 1)) "${known_groups[$i]}"
+    done
+  fi
+
+  while :; do
+    group=$(ask "$t_group")
+    if [[ "$group" =~ ^[0-9]+$ ]] && (( group >= 1 && group <= ${#known_groups[@]} )); then
+      group=${known_groups[$((group - 1))]}
+      break
+    fi
+    # The same group with other capitals keeps its own spelling.
+    for g in "${known_groups[@]}"; do
+      [[ "${g,,}" == "${group,,}" ]] && { group=$g; break 2; }
+    done
+    # shellcheck disable=SC2059  # the format is ours
+    read -rep "$(printf "$t_new_group" "$group")" answer
+    [[ "$answer" =~ ^[nN] ]] || break
+  done
+
+  desc=$(ask "$t_desc")
+  cmd=$(ask "$t_cmd")
+
+  mkdir -p "$own"
+  printf '#!/usr/bin/env bash\n# help-commands: %s\n# help-commands-group: %s\n\n%s\n' "$desc" "$group" "$cmd" >"$own/$name"
+  chmod 755 "$own/$name"
+  # shellcheck disable=SC2059  # the format is ours
+  printf "$t_added\n" "$name" "$own" "$group"
+}
+
+if [[ "${1:-}" == "--add" ]]; then
+  add_command
+  exit 0
+fi
+
 if (( ${#names[@]} == 0 )); then
   echo "$t_none"
   exit 0
@@ -115,6 +207,7 @@ if command -v whiptail >/dev/null 2>&1; then
     fi
     items+=("${names[$i]}" "${descs[$i]}")
   done
+  items+=("·" "" "+" "$t_add_item")
   menu_h=$(( ${#items[@]} / 2 ))
   (( menu_h > lines - 8 )) && menu_h=$(( lines - 8 ))
   while :; do
@@ -122,6 +215,10 @@ if command -v whiptail >/dev/null 2>&1; then
       $(( menu_h + 8 )) "$width" "$menu_h" "${items[@]}" 3>&1 1>&2 2>&3) || exit 0
     [[ "$choice" != "·" ]] && break
   done
+  if [[ "$choice" == "+" ]]; then
+    add_command
+    exit 0
+  fi
   for i in "${!names[@]}"; do
     [[ "${names[$i]}" == "$choice" ]] && pick=$i && break
   done

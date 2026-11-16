@@ -42,7 +42,9 @@ GLib.file_set_contents(`${config}/help-commands/groups`, '# comment\n*=Personal\
 GLib.setenv('HOME', home, true);
 GLib.setenv('XDG_CONFIG_HOME', config, true);
 
-const {scan, parseHeader, parseGroups, DEFAULT_GROUP} = await import('../extension/commands.js');
+const {scan, parseHeader, parseGroups, DEFAULT_GROUP, validName, groupNames, isKnownGroup, scriptFor, createCommand} =
+    await import('../extension/commands.js');
+const says = (key, ...args) => [key, ...args].join(':');
 
 check('parseHeader reads the description and the group',
     parseHeader('#!/bin/sh\n# help-commands: Does a thing.\n# help-commands-group: Tools\n'),
@@ -58,6 +60,36 @@ check('scan finds, groups and sorts', found, [
     {group: 'Home', name: 'backup-photos', description: 'Copies the photos to the NAS.'},
     {group: 'Work', name: 'vpn-up', description: 'Connects the work VPN.'},
 ]);
+check('scan says whether you can edit each one', (await scan()).filter(each => each.path.startsWith(home)).map(each => each.writable), [true, true]);
+
+check('a valid name: letters, digits, dots, dashes, underscores',
+    ['vpn-up', 'a', 'x.2_b', 'vpn up', '-x', '', 'a/b', '.hidden'].map(validName), [true, true, true, false, false, false, false, false]);
+check('groupNames: the groups in use, once and sorted',
+    groupNames([{group: 'Work'}, {group: 'Home'}, {group: 'Work'}]), ['Home', 'Work']);
+check('isKnownGroup ignores case and borders', [isKnownGroup(' work ', ['Work']), isKnownGroup('Casa', ['Work'])], [true, false]);
+check('scriptFor writes the header and the command, each field on one line',
+    scriptFor({description: 'Connects\nthe VPN.', group: 'Work', command: '  nmcli connection up "Work"  '}),
+    '#!/usr/bin/env bash\n# help-commands: Connects the VPN.\n# help-commands-group: Work\n\nnmcli connection up "Work"\n');
+
+const created = createCommand({name: 'photos-sync', group: 'Casa', description: 'Syncs the photos.', command: 'echo synced'}, says);
+check('createCommand writes it in ~/.local/bin', created, `${bin}/photos-sync`);
+check('the new one is executable and the list finds it in its new group',
+    (await scan()).filter(each => each.name === 'photos-sync').map(({group, description}) => ({group, description})),
+    [{group: 'Casa', description: 'Syncs the photos.'}]);
+
+const refusal = fields => {
+    try {
+        createCommand({name: 'ok', group: 'G', description: 'D', command: 'true', ...fields}, says);
+        return 'created';
+    } catch (error) {
+        return error.message;
+    }
+};
+check('createCommand refuses a bad name, a taken one and an empty field', [
+    refusal({name: 'bad name'}),
+    refusal({name: 'vpn-up'}),
+    refusal({name: 'another', description: '  '}),
+], ['invalidName', 'nameTaken:vpn-up', 'missingField']);
 
 GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(home)}`);
 
