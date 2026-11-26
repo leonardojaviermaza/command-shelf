@@ -3,6 +3,8 @@
 //
 //   # help-commands: <what it does>
 //   # help-commands-group: <group>        (optional)
+//   # help-commands-arg: <name> <help>    (optional, one per parameter, in order: <name> is required, [name] optional,
+//                                          <name=value> starts with that value, <name=a|b> proposes those)
 //
 // A command without its own group line takes the one ~/.config/help-commands/groups gives it ("<command>=<group>", one per
 // line, "*=<group>" for the default); without either, the default group. The same rules as the `help-commands` CLI of this
@@ -20,8 +22,11 @@ Gio._promisify(Gio.File.prototype, 'load_contents_async');
 
 export const DEFAULT_GROUP = 'General';
 
-const HEADER_BYTES = 1024;
+const HEADER_BYTES = 4096;
+// The description and the group go among the first five lines; the parameters, one line each, may come further down.
 const HEADER_LINES = 5;
+const ARG_LINES = 30;
+const ARG_PREFIX = '# help-commands-arg:';
 const ATTRIBUTES = 'standard::name,standard::type,access::can-execute,access::can-read,access::can-write';
 
 /** The folder of your own commands, where a new one is written. */
@@ -96,16 +101,64 @@ export function createCommand({name, group, description, command}, says) {
     return path;
 }
 
-/** The description and the group a script's first lines declare, or null if it is not one of ours. */
+/**
+ * One parameter line, after its prefix: "<name> <help>" is a required one, "[name] <help>" an optional one. "<name=value>"
+ * or "[name=value]" gives the value its field starts with, and "name=a|b|c" proposes several, starting with the first: they
+ * are suggestions, any other value can be typed (checking it is the script's job). Null if it is none of those.
+ */
+export function parseArg(text) {
+    const match = /^\s*(?:<([^<>]+)>|\[([^[\]]+)\])\s*(.*)$/.exec(text);
+
+    if (match === null)
+        return null;
+
+    const inside = match[1] ?? match[2];
+    const at = inside.indexOf('=');
+    const name = (at < 0 ? inside : inside.slice(0, at)).trim();
+    const choices = at < 0 ? [] : inside.slice(at + 1).split('|').map(each => each.trim()).filter(each => each !== '');
+
+    return name === '' ? null : {name, required: match[1] !== undefined, value: choices[0] ?? '', choices, help: match[3].trim()};
+}
+
+/** The description, the group and the parameters a script's first lines declare, or null if it is not one of ours. */
 export function parseHeader(text) {
-    const lines = text.replaceAll('\0', '').split('\n').slice(0, HEADER_LINES);
+    const all = text.replaceAll('\0', '').split('\n');
+    const lines = all.slice(0, HEADER_LINES);
     const value = prefix => {
         const line = lines.find(each => each.startsWith(prefix));
         return line === undefined ? '' : line.slice(prefix.length).trim();
     };
     const description = value('# help-commands:');
 
-    return description === '' ? null : {description, group: value('# help-commands-group:')};
+    if (description === '')
+        return null;
+
+    const args = all.slice(0, ARG_LINES)
+        .filter(each => each.startsWith(ARG_PREFIX))
+        .map(each => parseArg(each.slice(ARG_PREFIX.length)))
+        .filter(each => each !== null);
+
+    return {description, group: value('# help-commands-group:'), args};
+}
+
+/**
+ * The arguments to run a command with, from what was typed for each parameter (same order): each one as a single argument,
+ * spaces and all; an optional one left empty is not passed. `missing` names the required ones left empty: then it does not run.
+ */
+export function argvFor(args, values) {
+    const argv = [];
+    const missing = [];
+
+    args.forEach((arg, i) => {
+        const value = (values[i] ?? '').trim();
+
+        if (value !== '')
+            argv.push(value);
+        else if (arg.required)
+            missing.push(arg.name);
+    });
+
+    return {argv, missing};
 }
 
 /** "<command>=<group>" lines, "*=<group>" for the default; "#" starts a comment. */
@@ -181,7 +234,7 @@ async function entriesOf(path) {
     return found;
 }
 
-/** Every command, sorted by group and name: `{group, name, description, path, writable}`. */
+/** Every command, sorted by group and name: `{group, name, description, args, path, writable}`. */
 export async function scan() {
     const groups = await readGroups();
     const fallback = groups.get('*') || DEFAULT_GROUP;
@@ -208,6 +261,7 @@ export async function scan() {
                 group: header.group || groups.get(name) || fallback,
                 name,
                 description: header.description,
+                args: header.args,
                 path: file.get_path(),
                 writable,
             });

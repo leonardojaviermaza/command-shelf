@@ -67,6 +67,31 @@ start-dev=Work
 
 Without a group anywhere, a script goes to **General**. If a name is in both folders, `~/.local/bin` wins.
 
+## Commands that need parameters
+
+A script that needs arguments says which ones, one line each and in the order it takes them, among its first 30 lines:
+
+```bash
+#!/usr/bin/env bash
+# help-commands: Opens the database writes for a while.
+# help-commands-group: Work
+# help-commands-arg: <environment=prod|staging> Where to open them
+# help-commands-arg: [minutes=30] How long they stay open
+# help-commands-arg: <reason> Why you open them
+```
+
+- `<name>` is required, `[name]` optional; what follows is the help shown next to its field.
+- `name=value` starts the field with that value; `name=a|b` proposes both, as buttons, starting with the first. They are
+  suggestions: you can type any other value, and checking it is the script's job.
+
+Picking such a command in the menu opens a window with one field per parameter before running it. A required one left
+empty keeps it from running (the window says what is missing; Esc cancels). An optional one left empty is not passed at
+all. Each answer reaches the script as one argument, spaces included, so `"<reason>"` needs no quotes.
+
+`help-commands` asks for the same parameters, one by one, in the terminal (a required one is asked again while empty;
+Ctrl-D leaves). A command that declares none runs without arguments from the menu, and the terminal asks for a free line
+of arguments, as before.
+
 ## Install
 
 ### The top bar icon (GNOME Shell 45 to 50)
@@ -95,7 +120,7 @@ sudo install -m 755 command-shelf/bin/help-commands /usr/local/bin/
 ```
 
 ```bash
-help-commands          # a menu (whiptail) to pick one and run it, asking for its arguments
+help-commands          # a menu (whiptail) to pick one and run it, asking for its parameters
 help-commands --list   # just the list, by group
 help-commands --add    # add a new command
 ```

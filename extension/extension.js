@@ -18,7 +18,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import {scan, groupNames, groupsFile} from './commands.js';
-import {AddCommandDialog} from './dialog.js';
+import {AddCommandDialog, ArgsDialog} from './dialog.js';
 import {says} from './texts.js';
 
 const TITLE = 'Command Shelf';
@@ -37,8 +37,9 @@ function terminal() {
     return TERMINALS.find(([program]) => GLib.find_program_in_path(program) !== null) ?? null;
 }
 
-// The command runs in a shell that waits for a key at the end, so its output stays on screen.
-function run(command) {
+// The command runs in a shell that waits for a key at the end, so its output stays on screen. Each argument reaches it as one,
+// spaces and all: they go to bash as its positional parameters, never inside the script's text.
+function run(command, argv = []) {
     const prefix = terminal();
 
     if (prefix === null) {
@@ -47,10 +48,10 @@ function run(command) {
     }
 
     const ended = GLib.shell_quote(says('ended', command.name, '%s'));
-    const script = `${GLib.shell_quote(command.path)}; status=$?; echo; printf ${ended} "$status"; read -rsn1`;
+    const script = `${GLib.shell_quote(command.path)} "$@"; status=$?; echo; printf ${ended} "$status"; read -rsn1`;
 
     try {
-        GLib.spawn_async(null, [...prefix, 'bash', '-c', script], null, GLib.SpawnFlags.SEARCH_PATH, null);
+        GLib.spawn_async(null, [...prefix, 'bash', '-c', script, command.name, ...argv], null, GLib.SpawnFlags.SEARCH_PATH, null);
     } catch (error) {
         Main.notifyError(TITLE, says('cannotOpen', command.name, error.message));
     }
@@ -181,7 +182,13 @@ class ShelfButton extends PanelMenu.Button {
         });
         item.add_child(editButton);
 
-        item.connect('activate', () => run(command));
+        // A command that declares its parameters asks for them first.
+        item.connect('activate', () => {
+            if (command.args.length > 0)
+                new ArgsDialog(command, argv => run(command, argv)).open();
+            else
+                run(command);
+        });
 
         return item;
     }

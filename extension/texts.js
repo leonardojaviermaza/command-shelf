@@ -29,6 +29,9 @@ const TEXTS = {
         noTerminal: 'No terminal found to run the command.',
         cannotOpen: 'Could not open %s: %s',
         ended: '%s ended: %s. Press a key to close',
+        run: 'Run',
+        optional: '%s (optional)',
+        missingArgs: 'Missing: %s.',
     },
     es: {
         empty: 'Todavía no hay comandos: agregá uno abajo, o poné una línea "# help-commands: <descripción>" en un script de ~/.local/bin',
@@ -55,6 +58,9 @@ const TEXTS = {
         noTerminal: 'No encontré una terminal para ejecutar el comando.',
         cannotOpen: 'No pude abrir %s: %s',
         ended: '%s terminó: %s. Apretá una tecla para cerrar',
+        run: 'Ejecutar',
+        optional: '%s (opcional)',
+        missingArgs: 'Falta: %s.',
     },
 };
 

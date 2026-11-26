@@ -10,6 +10,12 @@
 #      and "*=<group>" for the default;
 #   3. otherwise, "General".
 #
+# A command that needs parameters declares them, one line each and in order, among its first 30 lines:
+#   # help-commands-arg: <name> help         required: it is asked again while it is empty
+#   # help-commands-arg: [name] help         optional: left empty, it is not passed
+#   # help-commands-arg: [name=30] help      starts with that value; "name=a|b" proposes a and b, starting with a
+# Each answer reaches the command as one argument, spaces and all. A command without them asks for a free line of arguments.
+#
 # Usage:
 #   help-commands          a menu to pick a command and run it
 #   help-commands --list   only the list (also when the output is not a terminal)
@@ -29,6 +35,8 @@ if [[ "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" == es* ]]; then
   t_number="Número del comando (Enter para salir): "
   t_invalid="Opción inválida:"
   t_args="Argumentos para %s (Enter = ninguno): "
+  t_optional="opcional"
+  t_missing="Hace falta %s (Ctrl-D para salir)."
   t_add_item="＋ Agregar un comando"
   t_name="Nombre (letras, números, . - _): "
   t_bad_name="Ese nombre no sirve: sólo letras, números, puntos, guiones y guiones bajos, y empieza con letra o número."
@@ -48,6 +56,8 @@ else
   t_number="Command number (Enter to leave): "
   t_invalid="Invalid option:"
   t_args="Arguments for %s (Enter = none): "
+  t_optional="optional"
+  t_missing="%s is needed (Ctrl-D to leave)."
   t_add_item="＋ Add a command"
   t_name="Name (letters, digits, . - _): "
   t_bad_name="That name will not do: only letters, digits, dots, dashes and underscores, starting with a letter or digit."
@@ -76,13 +86,18 @@ names=()
 descs=()
 paths=()
 groups=()
+specs=()
 declare -A seen=()
 
-while IFS=$'\t' read -r group name desc path; do
+# The parameter lines of a command travel joined by this byte, which no header has.
+sep=$'\x1f'
+
+while IFS=$'\t' read -r group name desc path spec; do
   groups+=("$group")
   names+=("$name")
   descs+=("$desc")
   paths+=("$path")
+  specs+=("$spec")
 done < <(
   for dir in "$HOME/.local/bin" /usr/local/bin; do
     [[ -d "$dir" ]] || continue
@@ -90,13 +105,15 @@ done < <(
       [[ -f "$f" && -x "$f" && -r "$f" ]] || continue
       name=$(basename "$f")
       [[ "$name" != "$self" && -z "${seen[$name]:-}" ]] || continue
-      head=$(head -c 1024 "$f" 2>/dev/null | tr -d '\0' | head -5)
+      top=$(head -c 4096 "$f" 2>/dev/null | tr -d '\0' | head -30)
+      head=$(head -5 <<<"$top")
       desc=$(grep -m1 -a '^# help-commands:' <<<"$head" | sed 's/^# help-commands: *//')
       [[ -n "$desc" ]] || continue
       group=$(grep -m1 -a '^# help-commands-group:' <<<"$head" | sed 's/^# help-commands-group: *//; s/ *$//')
       [[ -n "$group" ]] || group=${mapped[$name]:-$default_group}
+      spec=$(grep -a '^# help-commands-arg:' <<<"$top" | sed 's/^# help-commands-arg: *//' | tr -d '\t' | paste -sd "$sep")
       seen[$name]=1
-      printf '%s\t%s\t%s\t%s\n' "$group" "$name" "$desc" "$f"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$group" "$name" "$desc" "$f" "$spec"
     done
   done | sort -t $'\t' -k1,1 -k2,2
 )
@@ -234,9 +251,67 @@ else
 fi
 
 (( pick >= 0 )) || exit 0
+
+# Asks for each declared parameter, in order, and leaves the answers in `argv`: "<name>" is asked again while empty, "[name]"
+# left empty is not passed, "name=a|b" starts with a and proposes b.
+ask_params() {
+  local line inside name required help values default prompt answer
+  local re_required='^[[:space:]]*<([^<>]+)>[[:space:]]*(.*)$'
+  local re_optional='^[[:space:]]*\[([^][]+)\][[:space:]]*(.*)$'
+  local -a lines
+  IFS="$sep" read -ra lines <<<"$1"
+  argv=()
+
+  for line in "${lines[@]}"; do
+    if [[ "$line" =~ $re_required ]]; then
+      required=1
+    elif [[ "$line" =~ $re_optional ]]; then
+      required=0
+    else
+      continue
+    fi
+    inside=${BASH_REMATCH[1]}
+    help=${BASH_REMATCH[2]}
+    name=$(sed 's/^ *//; s/ *$//' <<<"${inside%%=*}")
+    [[ -n "$name" ]] || continue
+    values=""
+    default=""
+    if [[ "$inside" == *=* ]]; then
+      values=$(sed 's/ *| */|/g; s/^ *|*//; s/|* *$//; s/||*/|/g' <<<"${inside#*=}")
+      default=${values%%|*}
+    fi
+
+    prompt=$name
+    (( required )) || prompt+=", $t_optional"
+    [[ "$values" == *"|"* ]] && prompt+=" ($values)"
+    [[ -n "$help" ]] && prompt+=" — $help"
+    prompt+=": "
+
+    while :; do
+      read -rep "$prompt" -i "$default" answer || { echo; exit 0; }
+      answer=$(sed 's/^ *//; s/ *$//' <<<"$answer")
+      if [[ -n "$answer" ]]; then
+        argv+=("$answer")
+        break
+      fi
+      (( required )) || break
+      # shellcheck disable=SC2059  # the format is ours
+      printf "$t_missing\n" "$name" >&2
+    done
+  done
+}
+
+if [[ -n "${specs[$pick]}" ]]; then
+  ask_params "${specs[$pick]}"
+  shown=""
+  (( ${#argv[@]} > 0 )) && shown=$(printf ' %q' "${argv[@]}")
+  echo "→ ${names[$pick]}$shown"
+  # By its path: ~/.local/bin is not always in the PATH.
+  exec "${paths[$pick]}" "${argv[@]}"
+fi
+
 # shellcheck disable=SC2059  # the format is ours
 read -rep "$(printf "$t_args" "${names[$pick]}")" args
 echo "→ ${names[$pick]} $args"
-# By its path: ~/.local/bin is not always in the PATH.
 # shellcheck disable=SC2086  # the arguments split as they would in the terminal
 exec "${paths[$pick]}" $args

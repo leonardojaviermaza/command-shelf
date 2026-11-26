@@ -36,21 +36,58 @@ write(`${bin}/vpn-up`, '#!/bin/sh\n# help-commands: Connects the work VPN.\n');
 write(`${bin}/plain-script`, '#!/bin/sh\necho no header here\n');
 write(`${bin}/not-executable`, '#!/bin/sh\n# help-commands: Should not show.\n', 0o644);
 write(`${bin}/late-header`, '#!/bin/sh\n#\n#\n#\n#\n#\n# help-commands: Past the fifth line.\n');
+write(`${bin}/open-writes`, [
+    '#!/bin/sh',
+    '# help-commands: Opens the writes.',
+    '#',
+    '# Usage: open-writes <environment> [minutes] "<reason>"',
+    '#',
+    '# help-commands-arg: <environment=prod|staging> Where',
+    '# help-commands-arg: [minutes=30] How long',
+    '# help-commands-arg: <reason> Why',
+    '',
+].join('\n'));
 write(`${bin}/help-commands`, '#!/bin/sh\n# help-commands: The CLI itself is not listed.\n');
 GLib.file_set_contents(`${config}/help-commands/groups`, '# comment\n*=Personal\nvpn-up = Work\n');
 
 GLib.setenv('HOME', home, true);
 GLib.setenv('XDG_CONFIG_HOME', config, true);
 
-const {scan, parseHeader, parseGroups, DEFAULT_GROUP, validName, groupNames, isKnownGroup, scriptFor, createCommand} =
+const {scan, parseHeader, parseArg, argvFor, parseGroups, DEFAULT_GROUP, validName, groupNames, isKnownGroup, scriptFor, createCommand} =
     await import('../extension/commands.js');
 const says = (key, ...args) => [key, ...args].join(':');
 
 check('parseHeader reads the description and the group',
     parseHeader('#!/bin/sh\n# help-commands: Does a thing.\n# help-commands-group: Tools\n'),
-    {description: 'Does a thing.', group: 'Tools'});
+    {description: 'Does a thing.', group: 'Tools', args: []});
 check('parseHeader without the line is not a command', parseHeader('#!/bin/sh\necho hi\n'), null);
-check('parseHeader ignores NUL bytes of a binary', parseHeader('\0ELF\0\0\n# help-commands: Odd.\n'), {description: 'Odd.', group: ''});
+check('parseHeader ignores NUL bytes of a binary', parseHeader('\0ELF\0\0\n# help-commands: Odd.\n'), {description: 'Odd.', group: '', args: []});
+check('parseArg: <name> is required, [name] optional, the rest is the help', [
+    parseArg(' <environment> Where it opens'),
+    parseArg('[minutes]'),
+], [
+    {name: 'environment', required: true, value: '', choices: [], help: 'Where it opens'},
+    {name: 'minutes', required: false, value: '', choices: [], help: ''},
+]);
+check('parseArg: =value starts the field with it, a|b proposes both and starts with the first', [
+    parseArg('[minutes=30] How long'),
+    parseArg('<confirm= yes | no |> Copy first'),
+], [
+    {name: 'minutes', required: false, value: '30', choices: ['30'], help: 'How long'},
+    {name: 'confirm', required: true, value: 'yes', choices: ['yes', 'no'], help: 'Copy first'},
+]);
+check('parseArg: a line that is neither is no parameter', ['environment', '<>', '[ ]', '<=x>', ''].map(parseArg), [null, null, null, null, null]);
+check('parseHeader reads the parameters in order, also past the fifth line',
+    parseHeader('#!/bin/sh\n# help-commands: X.\n#\n#\n#\n#\n# help-commands-arg: <a>\n# help-commands-arg: bad\n# help-commands-arg: [b=1]\n')
+        .args.map(({name, required, value}) => [name, required, value]),
+    [['a', true, ''], ['b', false, '1']]);
+check('parseHeader: past the 30th line a parameter is not read',
+    parseHeader(`#!/bin/sh\n# help-commands: X.\n${'#\n'.repeat(28)}# help-commands-arg: <late>\n`).args, []);
+const zoorden = [{name: 'environment', required: true}, {name: 'minutes', required: false}, {name: 'reason', required: true}];
+check('argvFor: one argument per answer, spaces and all, trimmed',
+    argvFor(zoorden, ['prod', ' 45 ', 'fix the base']), {argv: ['prod', '45', 'fix the base'], missing: []});
+check('argvFor: an optional one left empty is not passed', argvFor(zoorden, ['prod', '', 'fix']), {argv: ['prod', 'fix'], missing: []});
+check('argvFor: the required ones left empty are missing', argvFor(zoorden, [' ', '30', '']).missing, ['environment', 'reason']);
 check('parseGroups reads pairs, the default and skips comments',
     [...parseGroups('# c\n*=Personal\n a = B \nbroken\n=nothing\n')], [['*', 'Personal'], ['a', 'B']]);
 check('the built-in default group', DEFAULT_GROUP, 'General');
@@ -58,9 +95,13 @@ check('the built-in default group', DEFAULT_GROUP, 'General');
 const found = (await scan()).filter(each => each.path.startsWith(home)).map(({group, name, description}) => ({group, name, description}));
 check('scan finds, groups and sorts', found, [
     {group: 'Home', name: 'backup-photos', description: 'Copies the photos to the NAS.'},
+    {group: 'Personal', name: 'open-writes', description: 'Opens the writes.'},
     {group: 'Work', name: 'vpn-up', description: 'Connects the work VPN.'},
 ]);
-check('scan says whether you can edit each one', (await scan()).filter(each => each.path.startsWith(home)).map(each => each.writable), [true, true]);
+check('scan carries the parameters each command declares',
+    (await scan()).filter(each => each.path.startsWith(home)).map(each => [each.name, each.args.map(arg => arg.name)]),
+    [['backup-photos', []], ['open-writes', ['environment', 'minutes', 'reason']], ['vpn-up', []]]);
+check('scan says whether you can edit each one', (await scan()).filter(each => each.path.startsWith(home)).map(each => each.writable), [true, true, true]);
 
 check('a valid name: letters, digits, dots, dashes, underscores',
     ['vpn-up', 'a', 'x.2_b', 'vpn up', '-x', '', 'a/b', '.hidden'].map(validName), [true, true, true, false, false, false, false, false]);
