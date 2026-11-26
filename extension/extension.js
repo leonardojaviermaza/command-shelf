@@ -3,7 +3,8 @@
 // in a terminal. The list is read again every time the menu opens, so a new script shows up without restarting anything.
 //
 // Each group folds and unfolds with a click. Whether they start folded is a setting (the gear in Extensions); the ones you
-// open stay open the next time, until you fold them. At the bottom, «Add command…» writes a new one in ~/.local/bin.
+// open stay open the next time, until you fold them. At the bottom, «Add command…» writes a new one in ~/.local/bin; the ✎ of
+// each one opens a window to change what it does, its group and its parameters.
 
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
@@ -18,7 +19,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import {scan, groupNames, groupsFile} from './commands.js';
-import {AddCommandDialog, ArgsDialog} from './dialog.js';
+import {AddCommandDialog, ArgsDialog, EditCommandDialog} from './dialog.js';
 import {says} from './texts.js';
 
 const TITLE = 'Command Shelf';
@@ -57,11 +58,12 @@ function run(command, argv = []) {
     }
 }
 
-// Opens a file in the text editor: a script you own, or the groups file for the ones you cannot edit (owned by root).
-function edit(command) {
+// Opens the raw file in the text editor: a script you own, or the groups file for the ones you cannot edit (owned by root),
+// unless their own header gives the group: then the file would not count, and the script opens to read.
+function openRaw(command) {
     let path = command.path;
 
-    if (!command.writable) {
+    if (!command.writable && command.headerGroup === '') {
         path = groupsFile();
         if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
             GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
@@ -127,7 +129,7 @@ class ShelfButton extends PanelMenu.Button {
             const section = new PopupMenu.PopupSubMenuMenuItem(group, false);
 
             for (const command of commands.filter(each => each.group === group))
-                section.menu.addMenuItem(this._itemFor(command));
+                section.menu.addMenuItem(this._itemFor(command, groupNames(commands)));
 
             section.menu.connect('open-state-changed', (_menu, isOpen) => this._remember(group, isOpen));
             this.menu.addMenuItem(section);
@@ -157,7 +159,7 @@ class ShelfButton extends PanelMenu.Button {
         this._settings.set_strv('open-groups', [...open].sort());
     }
 
-    _itemFor(command) {
+    _itemFor(command, groups) {
         const item = new PopupMenu.PopupBaseMenuItem();
         const box = new St.BoxLayout({vertical: true, x_expand: true});
         const name = new St.Label({text: command.name, style: 'font-weight: bold;'});
@@ -178,7 +180,8 @@ class ShelfButton extends PanelMenu.Button {
         });
         editButton.connect('clicked', () => {
             this.menu.close();
-            edit(command);
+            new EditCommandDialog(command, groups, group => Main.notify(TITLE, says('saved', command.name, group)),
+                () => openRaw(command)).open();
         });
         item.add_child(editButton);
 
