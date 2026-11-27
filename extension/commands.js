@@ -60,10 +60,10 @@ export function isKnownGroup(group, known) {
     return known.some(each => each.toLowerCase() === wanted);
 }
 
+const oneLine = text => text.replaceAll(/\s*\n\s*/g, ' ').trim();
+
 /** The text of a new command: the header the list reads, then what it runs. */
 export function scriptFor({description, group, command}) {
-    const oneLine = text => text.replaceAll(/\s*\n\s*/g, ' ').trim();
-
     return [
         '#!/usr/bin/env bash',
         `# help-commands: ${oneLine(description)}`,
@@ -118,6 +118,148 @@ export function parseArg(text) {
     const choices = at < 0 ? [] : inside.slice(at + 1).split('|').map(each => each.trim()).filter(each => each !== '');
 
     return name === '' ? null : {name, required: match[1] !== undefined, value: choices[0] ?? '', choices, help: match[3].trim()};
+}
+
+/** One parameter as its header line writes it, after the prefix: the inverse of `parseArg`. */
+export function formatArg({name, required, choices = [], help = ''}) {
+    const inside = choices.length === 0 ? name.trim() : `${name.trim()}=${choices.map(each => each.trim()).join('|')}`;
+    const text = required ? `<${inside}>` : `[${inside}]`;
+    const said = oneLine(help);
+
+    return said === '' ? text : `${text} ${said}`;
+}
+
+/**
+ * The parameters as the edit window gives them back, checked: a name each, without the signs the syntax uses, and not twice;
+ * no value with those signs either. Throws with the reason the window shows.
+ */
+export function checkArgs(args, says) {
+    const names = new Set();
+
+    for (const arg of args) {
+        const name = arg.name.trim();
+
+        if (name === '')
+            throw new Error(says('argNameMissing'));
+        if (/[<>[\]=|]/.test(name) || arg.choices.some(each => /[<>[\]|]/.test(each)))
+            throw new Error(says('argSigns', name));
+        if (names.has(name))
+            throw new Error(says('argTwice', name));
+        names.add(name);
+    }
+}
+
+const DESCRIPTION_PREFIX = '# help-commands:';
+const GROUP_PREFIX = '# help-commands-group:';
+
+/**
+ * A script with its header rewritten: the description, the group (unless `group` is null: then its line, or its absence, stays)
+ * and the parameter lines, which replace the old ones where the first one was, or go under the group. Every other line stays
+ * as it was. The script must already be one of ours (a description line among its first five lines).
+ */
+export function rewriteHeader(text, {description, group = null, args}) {
+    const lines = text.split('\n');
+    const head = lines.slice(0, HEADER_LINES);
+    const descriptionAt = head.findIndex(each => each.startsWith(DESCRIPTION_PREFIX));
+
+    if (descriptionAt < 0)
+        throw new Error('not a help-commands script');
+
+    lines[descriptionAt] = `${DESCRIPTION_PREFIX} ${oneLine(description)}`;
+
+    if (group !== null) {
+        const groupAt = head.findIndex(each => each.startsWith(GROUP_PREFIX));
+        const groupLine = `${GROUP_PREFIX} ${oneLine(group)}`;
+
+        if (groupAt >= 0) {
+            lines[groupAt] = groupLine;
+        } else if (descriptionAt + 1 < HEADER_LINES) {
+            lines.splice(descriptionAt + 1, 0, groupLine);
+        } else {
+            // The description is the fifth line: the group under it would not be read. Both go up, under the #! line.
+            const top = lines[0].startsWith('#!') ? 1 : 0;
+            const [descriptionLine] = lines.splice(descriptionAt, 1);
+            lines.splice(top, 0, descriptionLine, groupLine);
+        }
+    }
+
+    const argLines = args.map(arg => `${ARG_PREFIX} ${formatArg(arg)}`);
+    const oldAt = lines.slice(0, ARG_LINES).findIndex(each => each.startsWith(ARG_PREFIX));
+    let at;
+
+    if (oldAt >= 0) {
+        at = oldAt;
+        for (let i = Math.min(lines.length, ARG_LINES) - 1; i >= oldAt; i--) {
+            if (lines[i].startsWith(ARG_PREFIX))
+                lines.splice(i, 1);
+        }
+    } else {
+        const top = lines.slice(0, HEADER_LINES + 1);
+        at = Math.max(...[DESCRIPTION_PREFIX, GROUP_PREFIX].map(prefix => top.findIndex(each => each.startsWith(prefix)))) + 1;
+    }
+
+    lines.splice(at, 0, ...argLines);
+    return lines.join('\n');
+}
+
+/** The groups file with `name=group` set: the line it had changes in place, or a new one goes at the end. */
+export function setGroupLine(text, name, group) {
+    const lines = text === '' ? [] : text.replace(/\n$/, '').split('\n');
+    const line = `${name}=${oneLine(group)}`;
+    const at = lines.findIndex(each => {
+        const trimmed = each.trim();
+        const equals = trimmed.indexOf('=');
+        return !trimmed.startsWith('#') && equals > 0 && trimmed.slice(0, equals).trim() === name;
+    });
+
+    if (at >= 0)
+        lines[at] = line;
+    else
+        lines.push(line);
+
+    return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Saves what the edit window changed. A script you can write gets its header rewritten, and nothing else of it changes (its
+ * mode and a symlink stay: Gio writes through them). One you cannot (owned by root) only changes group, in the groups file,
+ * and only if its own header does not give one. Throws with the reason the window shows.
+ */
+export function saveCommand(command, {description, group, args}, says) {
+    if (group.trim() === '')
+        throw new Error(says('missingGroup'));
+
+    if (!command.writable) {
+        if (command.headerGroup !== '')
+            throw new Error(says('readOnly'));
+        const path = groupsFile();
+        let text = '';
+        try {
+            text = new TextDecoder().decode(GLib.file_get_contents(path)[1]);
+        } catch {}
+        GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+        GLib.file_set_contents(path, setGroupLine(text, command.name, group));
+        return path;
+    }
+
+    if (description.trim() === '')
+        throw new Error(says('missingDescription'));
+    checkArgs(args, says);
+
+    const file = Gio.File.new_for_path(command.path);
+    const [, bytes] = file.load_contents(null);
+    let text;
+    try {
+        text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    } catch {
+        throw new Error(says('notText'));
+    }
+
+    // A group that only came from the groups file, left as it was, keeps coming from there.
+    const keepGroup = command.headerGroup === '' && group.trim() === command.group;
+    const rewritten = rewriteHeader(text, {description, group: keepGroup ? null : group, args});
+    file.replace_contents(new TextEncoder().encode(rewritten), null, false, Gio.FileCreateFlags.NONE, null);
+    return command.path;
 }
 
 /** The description, the group and the parameters a script's first lines declare, or null if it is not one of ours. */
@@ -234,7 +376,10 @@ async function entriesOf(path) {
     return found;
 }
 
-/** Every command, sorted by group and name: `{group, name, description, args, path, writable}`. */
+/**
+ * Every command, sorted by group and name: `{group, headerGroup, name, description, args, path, writable}`, where `headerGroup`
+ * is the one its own header gives ('' if none).
+ */
 export async function scan() {
     const groups = await readGroups();
     const fallback = groups.get('*') || DEFAULT_GROUP;
@@ -259,6 +404,7 @@ export async function scan() {
             seen.add(name);
             commands.push({
                 group: header.group || groups.get(name) || fallback,
+                headerGroup: header.group,
                 name,
                 description: header.description,
                 args: header.args,

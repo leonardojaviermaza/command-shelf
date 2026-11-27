@@ -53,7 +53,8 @@ GLib.file_set_contents(`${config}/help-commands/groups`, '# comment\n*=Personal\
 GLib.setenv('HOME', home, true);
 GLib.setenv('XDG_CONFIG_HOME', config, true);
 
-const {scan, parseHeader, parseArg, argvFor, parseGroups, DEFAULT_GROUP, validName, groupNames, isKnownGroup, scriptFor, createCommand} =
+const {scan, parseHeader, parseArg, argvFor, parseGroups, DEFAULT_GROUP, validName, groupNames, isKnownGroup, scriptFor, createCommand,
+    formatArg, checkArgs, rewriteHeader, setGroupLine, saveCommand} =
     await import('../extension/commands.js');
 const says = (key, ...args) => [key, ...args].join(':');
 
@@ -131,6 +132,116 @@ check('createCommand refuses a bad name, a taken one and an empty field', [
     refusal({name: 'vpn-up'}),
     refusal({name: 'another', description: '  '}),
 ], ['invalidName', 'nameTaken:vpn-up', 'missingField']);
+
+check('formatArg writes what parseArg reads', [
+    {name: 'environment', required: true, choices: ['prod', 'staging'], help: 'Where'},
+    {name: 'minutes', required: false, choices: ['30'], help: ''},
+    {name: 'reason', required: true, choices: [], help: 'Why\nyou open them'},
+].map(formatArg), ['<environment=prod|staging> Where', '[minutes=30]', '<reason> Why you open them']);
+check('formatArg and parseArg go round', ['<a=x|y> Help me', '[b]', '[c=1] One'].map(text => formatArg(parseArg(text))),
+    ['<a=x|y> Help me', '[b]', '[c=1] One']);
+
+const argRefusal = args => {
+    try {
+        checkArgs(args.map(([name, choices = []]) => ({name, choices})), says);
+        return 'fine';
+    } catch (error) {
+        return error.message;
+    }
+};
+check('checkArgs refuses an empty name, the signs of the syntax and a name twice', [
+    argRefusal([['a'], ['b', ['x', 'y']]]),
+    argRefusal([[' ']]),
+    argRefusal([['a=b']]),
+    argRefusal([['a', ['x|y']]]),
+    argRefusal([['a'], [' a ']]),
+], ['fine', 'argNameMissing', 'argSigns:a=b', 'argSigns:a', 'argTwice:a']);
+
+const script = [
+    '#!/bin/sh',
+    '# help-commands: Old.',
+    '# help-commands-group: Old group',
+    '# Usage: x <a>',
+    '# help-commands-arg: <a> First',
+    '# help-commands-arg: [b] Second',
+    'echo "$@"  # help-commands-arg: in the body is not one',
+    '',
+].join('\n');
+const newArgs = [{name: 'c', required: false, choices: ['1', '2'], help: 'Third'}];
+check('rewriteHeader changes the header lines and leaves the rest',
+    rewriteHeader(script, {description: 'New.', group: 'New group', args: newArgs}),
+    '#!/bin/sh\n# help-commands: New.\n# help-commands-group: New group\n# Usage: x <a>\n# help-commands-arg: [c=1|2] Third\n'
+    + 'echo "$@"  # help-commands-arg: in the body is not one\n');
+check('rewriteHeader with no parameters drops their lines; a null group stays as it was',
+    rewriteHeader(script, {description: 'New.', group: null, args: []}),
+    '#!/bin/sh\n# help-commands: New.\n# help-commands-group: Old group\n# Usage: x <a>\n'
+    + 'echo "$@"  # help-commands-arg: in the body is not one\n');
+check('rewriteHeader adds a missing group under the description, the parameters under it',
+    rewriteHeader('#!/bin/sh\n# help-commands: D.\necho hi\n', {description: 'D.', group: 'G', args: newArgs}),
+    '#!/bin/sh\n# help-commands: D.\n# help-commands-group: G\n# help-commands-arg: [c=1|2] Third\necho hi\n');
+check('rewriteHeader with a null group and none leaves it out',
+    rewriteHeader('#!/bin/sh\n# help-commands: D.\necho hi\n', {description: 'D.', group: null, args: []}),
+    '#!/bin/sh\n# help-commands: D.\necho hi\n');
+const fifth = '#!/bin/sh\n#\n#\n#\n# help-commands: D.\necho hi\n';
+check('rewriteHeader: a description on the fifth line goes up with the group, so both are read', [
+    rewriteHeader(fifth, {description: 'D.', group: 'G', args: []}),
+    parseHeader(rewriteHeader(fifth, {description: 'D.', group: 'G', args: []})).group,
+], ['#!/bin/sh\n# help-commands: D.\n# help-commands-group: G\n#\n#\n#\necho hi\n', 'G']);
+check('rewriteHeader keeps the parameters where the first one was, past the fifth line',
+    rewriteHeader('#!/bin/sh\n# help-commands: D.\n#\n#\n#\n#\n# help-commands-arg: <a>\nrun\n', {description: 'D.', group: null, args: newArgs}),
+    '#!/bin/sh\n# help-commands: D.\n#\n#\n#\n#\n# help-commands-arg: [c=1|2] Third\nrun\n');
+
+check('setGroupLine changes the line in place or adds one at the end', [
+    setGroupLine('# c\n*=Personal\nvpn-up = Work\n', 'vpn-up', 'Home'),
+    setGroupLine('*=Personal', 'tool', 'Admin'),
+    setGroupLine('', 'tool', 'Admin'),
+    setGroupLine('# tool=Old\n', 'tool', 'Admin'),
+], ['# c\n*=Personal\nvpn-up=Home\n', '*=Personal\ntool=Admin\n', 'tool=Admin\n', '# tool=Old\ntool=Admin\n']);
+
+const openWrites = (await scan()).find(each => each.name === 'open-writes');
+check('scan gives the group of the header apart', [openWrites.headerGroup, openWrites.group], ['', 'Personal']);
+saveCommand(openWrites, {
+    description: 'Opens the writes, for a while.',
+    group: 'Personal',
+    args: [...openWrites.args.slice(0, 2), {name: 'ticket', required: true, choices: [], help: 'The ticket'}],
+}, says);
+check('saveCommand rewrites the header and keeps the rest, the mode and the group from the groups file', [
+    new TextDecoder().decode(GLib.file_get_contents(`${bin}/open-writes`)[1]),
+    GLib.file_test(`${bin}/open-writes`, GLib.FileTest.IS_EXECUTABLE),
+], [[
+    '#!/bin/sh',
+    '# help-commands: Opens the writes, for a while.',
+    '#',
+    '# Usage: open-writes <environment> [minutes] "<reason>"',
+    '#',
+    '# help-commands-arg: <environment=prod|staging> Where',
+    '# help-commands-arg: [minutes=30] How long',
+    '# help-commands-arg: <ticket> The ticket',
+    '',
+].join('\n'), true]);
+saveCommand(openWrites, {description: 'Opens the writes.', group: 'Ops', args: []}, says);
+check('saveCommand with another group writes it in the header',
+    (await scan()).filter(each => each.name === 'open-writes').map(({group, headerGroup, args}) => [group, headerGroup, args.length]),
+    [['Ops', 'Ops', 0]]);
+
+const saveRefusal = (command, fields) => {
+    try {
+        saveCommand(command, {description: 'D', group: 'G', args: [], ...fields}, says);
+        return 'saved';
+    } catch (error) {
+        return error.message;
+    }
+};
+const rootOne = {name: 'root-tool', path: '/nonexistent/root-tool', writable: false, group: 'Personal', headerGroup: ''};
+check('saveCommand refuses an empty group or description, and a root one with its own group', [
+    saveRefusal(openWrites, {group: ' '}),
+    saveRefusal(openWrites, {description: ''}),
+    saveRefusal({...rootOne, headerGroup: 'Admin'}, {}),
+], ['missingGroup', 'missingDescription', 'readOnly']);
+check('saveCommand on a root one only writes its group in the groups file', [
+    saveCommand(rootOne, {description: 'ignored', group: 'Admin', args: []}, says),
+    new TextDecoder().decode(GLib.file_get_contents(`${config}/help-commands/groups`)[1]),
+], [`${config}/help-commands/groups`, '# comment\n*=Personal\nvpn-up = Work\nroot-tool=Admin\n']);
 
 GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(home)}`);
 

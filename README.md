@@ -32,8 +32,17 @@ From the menu, **Add command…** asks for four things and writes the script in 
 | What it does | `Connects the work VPN.` |
 | What it runs | `nmcli connection up "Work"` |
 
-The **✎** next to a command opens its script in your text editor, to change what it runs, its description or its group.
-For a command you cannot edit (owned by root), it opens the groups file instead (below).
+The **✎** next to a command opens a window with its fields already filled: what it does, its group (the existing ones as
+buttons, or a new name) and its [parameters](#commands-that-need-parameters), one row each with its name, its proposed
+values (`a|b`), its help and whether it is required; **Add parameter** adds one and **−** takes it out. **Save** rewrites
+only those header lines (`# help-commands:`, `# help-commands-group:`, `# help-commands-arg:`): the rest of the script, its
+permissions and a symlink stay as they were. The name is not changed there, and neither is what it runs: **Open in the
+editor**, in the same window, opens the raw script for that.
+
+For a command you cannot edit (owned by root), the window shows what it does and its parameters without letting you change
+them, and **Save** writes only its group, as a `<command>=<group>` line of the groups file (below). If its own header gives
+a group, that one wins over the file, so nothing can be saved from the window. **Open in the editor** opens the groups file, or the script
+itself, to read, when its header gives the group.
 
 In a terminal, `help-commands --add` asks the same four questions, and asks before creating a new group.
 
